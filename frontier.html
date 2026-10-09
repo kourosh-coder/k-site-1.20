@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Frontier</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Instrument+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  box-sizing:border-box;
+  --bg:#e9eef6;--card:#fff;--ink:#1c2740;--muted:#6b7794;--line:#d5dcea;--board:#c9d4ea;
+  --p1:#1c2740;--p1t:#fff;--p2:#f6d84c;--p2t:#1c2740;--accent:#2f5bea;--danger:#e0453a;--gold:#b58f00;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){--bg:#141b2d;--card:#24304e;--ink:#e8edf8;--muted:#93a0bf;--line:#2c3856;--board:#24304e;--p1:#e8edf8;--p1t:#141b2d;--accent:#7b9bff;--gold:#f6d84c}
+}
+:root[data-theme="dark"]{--bg:#141b2d;--card:#24304e;--ink:#e8edf8;--muted:#93a0bf;--line:#2c3856;--board:#24304e;--p1:#e8edf8;--p1t:#141b2d;--accent:#7b9bff;--gold:#f6d84c}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*:before,*:after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Instrument Sans",system-ui,sans-serif;font-size:16px;line-height:1.45}
+main{max-width:480px;margin:0 auto;padding:24px 12px 40px}
+h1{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:700;font-size:2.2rem;line-height:1.1;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 12px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;font-weight:500}
+button{font:inherit;cursor:pointer;border-radius:10px;border:2px solid var(--line);background:var(--card);color:var(--ink);padding:6px 10px}
+button:disabled{opacity:.45;cursor:default}
+button.go{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+:root[data-theme="dark"] button.go{color:#141b2d}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.board{display:grid;grid-template-columns:repeat(9,1fr);gap:2px;background:var(--line);padding:2px;border-radius:10px}
+.cell{aspect-ratio:1;background:var(--board);border:0;border-radius:4px;padding:0;position:relative;display:flex;align-items:center;justify-content:center}
+.cell.wall{background:var(--muted)}
+.cell.reach{box-shadow:inset 0 0 0 3px var(--accent);background:color-mix(in srgb,var(--accent) 22%,var(--board))}
+.cell.tgt{box-shadow:inset 0 0 0 3px var(--danger)}
+.cell.sel{outline:3px solid var(--accent);outline-offset:-3px}
+.mine{position:absolute;font-style:normal;font-size:1.5rem;line-height:1;color:var(--muted)}
+.mine.o0{color:var(--p1)}.mine.o1{color:var(--gold)}
+.u,.hq{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;font-weight:700;width:78%;height:78%}
+.u{border-radius:50%}.hq{border-radius:8px;width:92%;height:92%;font-size:.8rem}
+.u.o0,.hq.o0{background:var(--p1);color:var(--p1t)}
+.u.o1,.hq.o1{background:var(--p2);color:var(--p2t)}
+.u.done{opacity:.55}
+small{position:absolute;right:-2px;bottom:-4px;font-size:.62rem;background:var(--card);color:var(--ink);border-radius:6px;padding:0 3px;border:1px solid var(--line)}
+.msg{min-height:2.6em;margin:10px 0;font-weight:500;text-align:center}
+.rec{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.log{color:var(--muted);font-size:.9rem;min-height:4.2em;margin:0 0 8px}
+.help{color:var(--muted);font-size:.9rem;margin:0}
+</style>
+</head>
+<body>
+<main>
+  <h1>Frontier</h1>
+  <p class="sub">Destroy the enemy HQ (top right). Hold mines for income and build the right army.</p>
+  <div class="row"><span id="info"></span><button class="go" id="end" type="button">End turn</button></div>
+  <div class="board" id="board"></div>
+  <div class="msg" id="msg" aria-live="polite"></div>
+  <div class="rec" id="rec"></div>
+  <p class="log" id="log"></p>
+  <div class="row"><button id="new" type="button">New game</button></div>
+  <p class="help">Soldier: 6 HP, move 2. Archer: 4 HP, range 2. Knight: 8 HP, move 3. Soldier beats Knight, Knight beats Archer, Archer beats Soldier (+2 damage). Mines give +3 gold per turn while you hold them; step on one to capture it. New units can act next turn.</p>
+</main>
+<script>
+var G=9,T={S:{n:"Soldier",c:4,hp:6,a:3,m:2,r:1},A:{n:"Archer",c:5,hp:4,a:3,m:2,r:2},K:{n:"Knight",c:7,hp:8,a:4,m:3,r:1}};
+var BEAT={K:"A",A:"S",S:"K"},DIRS=[[1,0],[-1,0],[0,1],[0,-1]];
+var walls,mines,units,hq,gold,turn,turnNo,sel,over,winner,busy,notes,cells=[];
+function key(x,y){return x+","+y}
+function dist(a,b,c,d){return Math.abs(a-c)+Math.abs(b-d)}
+function ub(x,y){return units.find(function(u){return u.x===x&&u.y===y})}
+function hqAt(x,y){return hq.findIndex(function(h){return h.x===x&&h.y===y})}
+function blocked(x,y){return x<0||y<0||x>=G||y>=G||walls[key(x,y)]||ub(x,y)||hqAt(x,y)>=0}
+function mineAt(x,y){return mines.find(function(m){return m.x===x&&m.y===y})}
+function income(o){return 2+3*mines.filter(function(m){return m.owner===o}).length}
+function note(t){notes.push(t);if(notes.length>3)notes.shift()}
+function reach(u){
+  var q=[{x:u.x,y:u.y,d:0}],seen={},out=[];seen[key(u.x,u.y)]=1;
+  while(q.length){
+    var c=q.shift();out.push(c);if(c.d>=T[u.t].m)continue;
+    DIRS.forEach(function(d){var x=c.x+d[0],y=c.y+d[1];
+      if(!seen[key(x,y)]&&!blocked(x,y)){seen[key(x,y)]=1;q.push({x:x,y:y,d:c.d+1})}});
+  }
+  return out;
+}
+function targets(u,x,y){
+  var r=T[u.t].r,out=[];
+  units.forEach(function(e){if(e.o!==u.o&&dist(e.x,e.y,x,y)<=r)out.push({k:"u",e:e,x:e.x,y:e.y})});
+  var h=hq[1-u.o];if(dist(h.x,h.y,x,y)<=r)out.push({k:"h",e:h,x:h.x,y:h.y});
+  return out;
+}
+function dmg(a,d){return T[a.t].a+(d.t&&BEAT[a.t]===d.t?2:0)}
+function moveTo(u,x,y){u.x=x;u.y=y;u.moved=true;var m=mineAt(x,y);if(m&&m.owner!==u.o){m.owner=u.o;note((u.o?"Enemy":"You")+" captured a mine.")}}
+function attack(u,g){
+  var e=g.e,d=dmg(u,e),dd=dist(u.x,u.y,e.x,e.y);e.hp-=d;u.moved=u.acted=true;
+  var m=(u.o?"Enemy ":"Your ")+T[u.t].n+" hit "+(g.k==="h"?"HQ":T[e.t].n)+" for "+d+".";
+  if(e.hp<=0){
+    if(g.k==="h"){over=true;winner=u.o}else{units=units.filter(function(x){return x!==e});m+=" Destroyed."}
+  }else if(g.k==="u"&&dd===1){
+    var c=dmg(e,u);u.hp-=c;m+=" Counter "+c+".";
+    if(u.hp<=0){units=units.filter(function(x){return x!==u});m+=" Attacker lost."}
+  }
+  note(m);
+}
+function recruit(o,t){
+  if(gold[o]<T[t].c)return false;
+  var h=hq[o],c=[];
+  for(var dx=-1;dx<=1;dx++)for(var dy=-1;dy<=1;dy++){var x=h.x+dx,y=h.y+dy;if((dx||dy)&&!blocked(x,y))c.push({x:x,y:y})}
+  if(!c.length)return false;
+  c.sort(function(a,b){return dist(a.x,a.y,4,4)-dist(b.x,b.y,4,4)});
+  gold[o]-=T[t].c;units.push({t:t,o:o,x:c[0].x,y:c[0].y,hp:T[t].hp,moved:true,acted:true});
+  return true;
+}
+function startTurn(o){gold[o]+=income(o);units.forEach(function(u){if(u.o===o)u.moved=u.acted=false})}
+function aiRecruit(){
+  var cnt={S:0,A:0,K:0},keys=["S","A","K"];
+  units.forEach(function(u){if(u.o===0)cnt[u.t]++});
+  var n=units.filter(function(u){return u.o===1}).length;
+  while(n<9){
+    keys.sort(function(a,b){return cnt[b]-cnt[a]||Math.random()-.5});
+    var want={K:"S",A:"K",S:"A"}[keys[0]];
+    if(gold[1]<T[want].c)want="S";
+    if(!recruit(1,want))break;
+    n++;
+  }
+}
+function aiAct(u){
+  var mn=mines.filter(function(m){return m.owner!==1}).sort(function(a,b){return dist(a.x,a.y,u.x,u.y)-dist(b.x,b.y,u.x,u.y)})[0];
+  var obj=mn&&dist(mn.x,mn.y,u.x,u.y)<=6?mn:hq[0],best=null,bs=-1e9;
+  reach(u).forEach(function(t){
+    var m=mineAt(t.x,t.y),base=-0.4*dist(t.x,t.y,obj.x,obj.y)+(m&&m.owner!==1?5:0);
+    if(base>bs){bs=base;best={t:t,g:null}}
+    targets(u,t.x,t.y).forEach(function(g){
+      var d=dmg(u,g.e),kill=g.e.hp<=d,ad=dist(t.x,t.y,g.x,g.y);
+      var s=base+3*d+(kill?12:0)+(g.k==="h"?d*2:0)-(ad===1&&g.k==="u"&&!kill?dmg(g.e,u)*2:0);
+      if(s>bs){bs=s;best={t:t,g:g}}
+    });
+  });
+  if(best.t.x!==u.x||best.t.y!==u.y)moveTo(u,best.t.x,best.t.y);
+  if(best.g)attack(u,best.g);
+}
+function aiTurn(){
+  startTurn(1);aiRecruit();render();
+  var list=units.filter(function(u){return u.o===1}),i=0;
+  (function step(){
+    if(over){render();return}
+    if(i>=list.length){turn=0;busy=false;turnNo++;startTurn(0);render();return}
+    var u=list[i++];
+    if(units.indexOf(u)>=0)aiAct(u);
+    render();setTimeout(step,350);
+  })();
+}
+function render(){
+  var rs={},ts={};
+  if(sel&&turn===0&&!over){
+    if(!sel.moved)reach(sel).forEach(function(c){if(c.d>0)rs[key(c.x,c.y)]=1});
+    if(!sel.acted)targets(sel,sel.x,sel.y).forEach(function(g){ts[key(g.x,g.y)]=1});
+  }
+  cells.forEach(function(el,i){
+    var x=i%G,y=Math.floor(i/G),k=key(x,y),h="",cls="cell",lab="Column "+(x+1)+", row "+(y+1)+": ";
+    if(walls[k]){cls+=" wall";lab+="mountain"}
+    var m=mineAt(x,y);
+    if(m){h+='<i class="mine o'+m.owner+'">&#9670;</i>';lab+="mine, "+(m.owner<0?"neutral":m.owner?"enemy":"yours")+". "}
+    var hi=hqAt(x,y);
+    if(hi>=0){h+='<span class="hq o'+hi+'">HQ<small>'+hq[hi].hp+'</small></span>';lab+=(hi?"enemy":"your")+" HQ, "+hq[hi].hp+" health"}
+    var u=ub(x,y);
+    if(u){h+='<span class="u o'+u.o+(u.moved&&u.acted?" done":"")+'">'+u.t+'<small>'+u.hp+'</small></span>';lab+=(u.o?"enemy ":"your ")+T[u.t].n+", "+u.hp+" health"}
+    if(rs[k]){cls+=" reach";lab+="can move here"}
+    if(ts[k]){cls+=" tgt";lab+=", can attack"}
+    if(sel&&sel===u)cls+=" sel";
+    el.className=cls;el.innerHTML=h;el.setAttribute("aria-label",lab);
+  });
+  document.getElementById("info").textContent="Turn "+turnNo+"   Gold "+gold[0]+" (+"+income(0)+" per turn)";
+  document.getElementById("msg").textContent=over?(winner===0?"Victory! The enemy HQ has fallen.":"Defeat. Your HQ has fallen."):busy?"Enemy is moving...":"Your turn. Select a unit, or recruit below.";
+  document.getElementById("log").innerHTML=notes.join("<br>");
+  document.querySelectorAll("#rec button").forEach(function(b){b.disabled=over||busy||gold[0]<T[b.dataset.t].c});
+  document.getElementById("end").disabled=over||busy;
+}
+function click(x,y){
+  if(over||busy||turn!==0)return;
+  var u=ub(x,y),s=sel;
+  if(s){
+    if(u&&u.o===0){sel=(u.moved&&u.acted)?null:u;render();return}
+    if(!s.acted){var g=targets(s,s.x,s.y).find(function(t){return t.x===x&&t.y===y});
+      if(g){attack(s,g);sel=null;render();return}}
+    if(!s.moved){var r=reach(s).find(function(c){return c.d>0&&c.x===x&&c.y===y});
+      if(r){moveTo(s,x,y);render();return}}
+    sel=null;render();return;
+  }
+  if(u&&u.o===0&&!(u.moved&&u.acted))sel=u;
+  render();
+}
+function newGame(){
+  walls={};[[3,5],[5,3],[2,4],[6,4],[4,6],[4,2]].forEach(function(p){walls[key(p[0],p[1])]=1});
+  mines=[[2,6],[6,2],[4,4],[6,6],[2,2]].map(function(p){return{x:p[0],y:p[1],owner:-1}});
+  units=[];hq=[{x:0,y:8,hp:20},{x:8,y:0,hp:20}];gold=[6,6];turn=0;turnNo=1;sel=null;over=false;winner=-1;busy=false;notes=[];
+  startTurn(0);render();
+}
+var bd=document.getElementById("board");
+for(var k=0;k<G*G;k++)(function(i){
+  var b=document.createElement("button");b.type="button";b.className="cell";
+  b.onclick=function(){click(i%G,Math.floor(i/G))};bd.appendChild(b);cells.push(b);
+})(k);
+var rec=document.getElementById("rec");
+["S","A","K"].forEach(function(t){
+  var b=document.createElement("button");b.type="button";b.dataset.t=t;b.textContent=T[t].n+" "+T[t].c+"g";
+  b.onclick=function(){if(!over&&!busy&&turn===0){if(!recruit(0,t))note("No free space next to your HQ.");render()}};
+  rec.appendChild(b);
+});
+document.getElementById("end").onclick=function(){
+  if(over||busy)return;sel=null;turn=1;busy=true;render();setTimeout(aiTurn,400);
+};
+document.getElementById("new").onclick=newGame;
+newGame();
+</script>
+</body>
+</html>
